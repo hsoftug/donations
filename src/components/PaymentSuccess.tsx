@@ -33,7 +33,7 @@ const PaymentSuccess = () => {
         }
 
         const response = await fetch(
-          `http://127.0.0.1:8000/api/donations/callback/?OrderTrackingId=${orderTrackingId}&OrderMerchantReference=${merchantReference}`
+          `https://api.hifitechsolns.com/api/donations/callback/?OrderTrackingId=${orderTrackingId}&OrderMerchantReference=${merchantReference}`
         );
 
         const data: PaymentData = await response.json();
