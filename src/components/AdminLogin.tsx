@@ -11,7 +11,7 @@ const AdminLogin = () => {
   const handleLogin = async () => {
     setError(""); // clear error
     try {
-      const res = await axios.post("http://127.0.0.1:8000/api/donations/admin_login/", {
+      const res = await axios.post("https://api.hifitechsolns.com/api/donations/admin_login/", {
         username,
         password,
       });
