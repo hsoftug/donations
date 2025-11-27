@@ -13,8 +13,12 @@ import {
   Cell,
 } from 'recharts';
 
-const API_URL = 'https://api.hifitechsolns.com/api/donations/admin_dashboard/';
+// --- Configuration ---
+// Note: Use environment variables (e.g., .env file) for real deployments
+const API_BASE_URL = 'https://api.hifitechsolns.com/api/donations/';
+const ADMIN_DASHBOARD_URL = `${API_BASE_URL}admin_dashboard/`;
 const CHART_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444'];
+// ---------------------
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
@@ -27,61 +31,82 @@ const AdminDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showAll, setShowAll] = useState(false);
 
-  // Fetch donations (reads token fresh from localStorage)
+  // --- Utility Functions ---
+
+  // Safely converts input to a number or returns 0
+  const safeParseFloat = (value) => {
+    const num = parseFloat(value);
+    return isFinite(num) ? num : 0;
+  };
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('adminToken');
+    localStorage.removeItem('adminUsername'); // Clear username if stored
+    navigate('/admin-login');
+  }, [navigate]);
+
+  // --- Data Fetching ---
   const fetchDonations = useCallback(async () => {
     setError(null);
     const token = localStorage.getItem('adminToken');
+    
     if (!token) {
-      console.warn('No adminToken found — redirecting to login');
-      navigate('/admin-login');
+      console.warn('No adminToken found - redirecting to login');
+      logout();
       return;
     }
 
     try {
       setLoading(true);
-      const res = await fetch(API_URL, {
+      const res = await fetch(ADMIN_DASHBOARD_URL, {
         headers: {
-          Authorization: `Token ${token}`,
+          // FIX: Use Bearer token, which is common with Django REST Framework JWT
+          Authorization: `Bearer ${token}`, 
           'Content-Type': 'application/json',
         },
       });
 
       if (res.status === 401 || res.status === 403) {
-        console.warn('Unauthorized / Forbidden from API, redirecting to login', res.status);
-        localStorage.removeItem('adminToken');
-        navigate('/admin-login');
+        console.warn('Unauthorized / Forbidden from API, clearing token and redirecting.', res.status);
+        logout();
         return;
       }
 
       if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`API error ${res.status} ${res.statusText} ${text}`);
+        const text = await res.text().catch(() => 'No response body');
+        throw new Error(`API error ${res.status} ${res.statusText}. Response: ${text.substring(0, 100)}`);
       }
 
       const data = await res.json();
       console.debug('Admin dashboard API returned:', data);
 
-      // If API returns an object with list inside, try to handle common shapes
+      // FIX: Standardize response handling. Assuming Django DRF returns an array or an object with 'results'
       let list = [];
-      if (Array.isArray(data)) list = data;
-      else if (Array.isArray(data.results)) list = data.results;
-      else if (Array.isArray(data.data)) list = data.data;
-      else if (typeof data === 'object' && Object.keys(data).length === 0) list = [];
-      else list = Array.isArray(data) ? data : (data ? [data] : []);
-
-      setDonations(list);
+      if (Array.isArray(data)) {
+        list = data;
+      } else if (Array.isArray(data.results)) {
+        list = data.results; // DRF pagination default
+      } else if (Array.isArray(data.data)) {
+        list = data.data; // Custom wrapper
+      } else if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+        // Handle case where it might be a single object, but expecting array
+        list = [data]; 
+      }
+      
+      setDonations(list.filter(d => d.id)); // Filter out any items missing an ID
     } catch (err) {
       console.error('Failed to fetch donations:', err);
-      setError('Failed to fetch donations. Open console for details.');
+      setError(`Failed to fetch donations: ${err.message}. Check console for details.`);
     } finally {
       setLoading(false);
     }
-  }, [navigate]);
+  }, [logout]);
 
-  // run on mount
+  // --- Lifecycle and Media Query ---
   useEffect(() => {
     fetchDonations();
 
+    // Media query handler for sidebar visibility
     const mql = window.matchMedia('(max-width: 900px)');
     setSidebarOpen(!mql.matches);
     const handler = (e) => setSidebarOpen(!e.matches);
@@ -93,12 +118,14 @@ const AdminDashboard = () => {
     };
   }, [fetchDonations]);
 
-  // filters apply when donations / search / status change
+  // --- Filtering Logic ---
   useEffect(() => {
     let filtered = [...donations];
+    
     if (statusFilter !== 'ALL') {
       filtered = filtered.filter((d) => (String(d.status || '')).toUpperCase() === statusFilter);
     }
+    
     if (searchTerm && searchTerm.trim() !== '') {
       const q = searchTerm.toLowerCase();
       filtered = filtered.filter((d) => {
@@ -111,14 +138,18 @@ const AdminDashboard = () => {
     setFilteredDonations(filtered);
   }, [donations, searchTerm, statusFilter]);
 
+  // --- Data Calculations ---
   const calculateStats = () => {
     const total = donations.length;
     const completed = donations.filter((d) => (String(d.status || '')).toUpperCase() === 'COMPLETED').length;
     const pending = donations.filter((d) => (String(d.status || '')).toUpperCase() === 'PENDING').length;
     const failed = donations.filter((d) => (String(d.status || '')).toUpperCase() === 'FAILED').length;
+    
+    // FIX: Use safeParseFloat
     const totalAmount = donations
       .filter((d) => (String(d.status || '')).toUpperCase() === 'COMPLETED')
-      .reduce((s, d) => s + (isFinite(parseFloat(d.amount)) ? parseFloat(d.amount || 0) : 0), 0);
+      .reduce((s, d) => s + safeParseFloat(d.amount), 0);
+      
     return { total, completed, pending, failed, totalAmount };
   };
 
@@ -128,14 +159,14 @@ const AdminDashboard = () => {
     const map = {};
     donations.forEach((d) => {
       const key = d.name || d.email || d.order_id || 'Anonymous';
-      const amt = parseFloat(d.amount || 0);
-      map[key] = (map[key] || 0) + (isFinite(amt) ? amt : 0);
+      const amt = safeParseFloat(d.amount); // FIX: Use safeParseFloat
+      map[key] = (map[key] || 0) + amt;
     });
     const arr = Object.entries(map).map(([name, amount]) => ({ name, amount }));
     return arr.sort((a, b) => b.amount - a.amount).slice(0, 7);
   };
 
-  const statusPieData = () => {
+  const pieData = () => {
     const counts = {};
     donations.forEach((d) => {
       const s = (d.status || 'UNKNOWN').toString().toUpperCase();
@@ -143,17 +174,23 @@ const AdminDashboard = () => {
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   };
+  
+  const topDonors = topDonorsData();
+  const statusPieData = pieData();
 
   const formatDate = (d) => {
     if (!d) return 'N/A';
     try {
-      return new Date(d).toLocaleString();
+      // FIX: Use a more robust date parsing mechanism if necessary, but this should work for ISO strings
+      return new Date(d).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' }); 
     } catch {
-      return d;
+      return String(d);
     }
   };
 
+  // --- Styles (Unchanged for Design Preservation) ---
   const styles = {
+    // ... (Your original styles object goes here, unchanged) ...
     root: {
       display: 'flex',
       minHeight: '100vh',
@@ -220,9 +257,7 @@ const AdminDashboard = () => {
     mobileToggle: { display: 'none', borderRadius: 10, padding: '8px 12px', cursor: 'pointer', border: '1px solid rgba(16,24,40,0.06)', background: 'white' },
     noData: { padding: 28, textAlign: 'center', color: '#64748b' },
   };
-
-  const topDonors = topDonorsData();
-  const pieData = statusPieData();
+  // --- End Styles ---
 
   if (loading) {
     return (
@@ -230,6 +265,20 @@ const AdminDashboard = () => {
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Loading dashboard…</div>
           <div style={{ color: '#64748b' }}>Fetching donations from the server</div>
+          {error && <div style={{ color: '#ef4444', marginTop: 10, fontWeight: 600 }}>Error: {error}</div>}
+        </div>
+      </div>
+    );
+  }
+  
+  // Display error message if fetching failed after loading
+  if (error && !donations.length) {
+    return (
+      <div style={{ ...styles.root, alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8, color: '#ef4444' }}>Data Loading Failed</div>
+          <div style={{ color: '#64748b' }}>{error}</div>
+          <button onClick={fetchDonations} style={{ marginTop: 15, padding: '8px 16px', borderRadius: 10, background: '#667eea', color: 'white', border: 'none', cursor: 'pointer' }}>Try Refreshing</button>
         </div>
       </div>
     );
@@ -239,8 +288,10 @@ const AdminDashboard = () => {
     <div style={styles.root}>
       <style>
         {`
-          @media (max-width: 900px) { .mobileToggle { display: inline-flex !important; } .sidebarHidden { transform: translateX(0) !important; } }
-          @media (max-width: 760px) { .statsGrid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .chartsGrid { grid-template-columns: 1fr !important; } .chartsRow { grid-template-columns: 1fr !important; } .sidebar { position: fixed; z-index: 60; top: 0; left: 0; height: 100vh; } }
+          /* Media queries for responsiveness */
+          @media (max-width: 900px) { .mobileToggle { display: inline-flex !important; } .main { margin-left: 0 !important; } .sidebar { transition: transform 220ms ease; } .sidebarHidden { transform: translateX(-100%) !important; } }
+          @media (max-width: 760px) { .statsGrid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .chartsGrid { grid-template-columns: 1fr !important; } .chartsRow { grid-template-columns: 1fr !important; } .topBar { flex-direction: column; align-items: flex-start; gap: 15px; } .controls { margin-top: 10px; } }
+          @media (max-width: 500px) { .statsGrid { grid-template-columns: 1fr !important; } }
         `}
       </style>
 
@@ -259,11 +310,11 @@ const AdminDashboard = () => {
         </nav>
         <div style={{ fontSize: 13, opacity: 0.85 }}>
           <div style={{ marginBottom: 8 }}>Signed in as</div>
-          <div style={{ fontWeight: 800 }}>admin@lacharityorganisation.com</div>
+          <div style={{ fontWeight: 800 }}>{localStorage.getItem('adminUsername') || 'Admin User'}</div>
         </div>
       </aside>
 
-      <main style={styles.main}>
+      <main style={{...styles.main, marginLeft: sidebarOpen ? 280 : 0}} className="main">
         <div style={styles.topBar}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <button onClick={() => setSidebarOpen((s) => !s)} className="mobileToggle" style={styles.mobileToggle}>☰</button>
@@ -279,7 +330,7 @@ const AdminDashboard = () => {
             ))}
             <button onClick={fetchDonations} style={{ padding: '9px 14px', borderRadius: 10, border: '1px solid rgba(16,24,40,0.06)', background: 'white', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
             <div style={{ position: 'fixed', top: 10, right: 10, zIndex: 500 }}>
-              <button onClick={() => { localStorage.removeItem('adminToken'); navigate('/admin-login'); }} style={{ padding: '4px 7px', borderRadius: 10, border: '1px solid #e65c5c', background: '#e65c5c', color: 'white', cursor: 'pointer', fontWeight: 500 }}>Logout</button>
+              <button onClick={logout} style={{ padding: '4px 7px', borderRadius: 10, border: '1px solid #e65c5c', background: '#e65c5c', color: 'white', cursor: 'pointer', fontWeight: 500 }}>Logout</button>
             </div>
           </div>
         </div>
@@ -297,6 +348,13 @@ const AdminDashboard = () => {
             );
           })}
         </div>
+        
+        {/* Error notification for charts and table if data is empty */}
+        {donations.length === 0 && (
+            <div style={{...styles.noData, background: 'white', borderRadius: 12, marginBottom: 20}}>
+                No donation records found. Please ensure your API is returning data.
+            </div>
+        )}
 
         <div className="chartsGrid" style={styles.chartsRow}>
           <div style={{ ...styles.statCard, padding: 12 }}>
@@ -307,7 +365,7 @@ const AdminDashboard = () => {
                   <BarChart data={topDonors}>
                     <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                     <YAxis />
-                    <Tooltip />
+                    <Tooltip formatter={(value) => [`Shs.${value.toFixed(2)}`, 'Amount']} />
                     <Legend />
                     <Bar dataKey="amount" fill={CHART_COLORS[0]} />
                   </BarChart>
@@ -317,12 +375,12 @@ const AdminDashboard = () => {
           </div>
           <div style={{ ...styles.statCard, padding: 12 }}>
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Status breakdown</div>
-            {pieData.length === 0 ? <div style={styles.noData}>No donations</div> : (
+            {statusPieData.length === 0 ? <div style={styles.noData}>No donations</div> : (
               <div style={{ width: '100%', height: 260 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" outerRadius={80} innerRadius={34} label>
-                      {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />)}
+                    <Pie data={statusPieData} dataKey="value" nameKey="name" outerRadius={80} innerRadius={34} label>
+                      {statusPieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />)}
                     </Pie>
                     <Tooltip />
                   </PieChart>
@@ -345,17 +403,19 @@ const AdminDashboard = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredDonations.length === 0 ? (
-                <tr><td colSpan="6" style={styles.td}><div style={styles.noData}>No donations match your filters</div></td></tr>
+              {filteredDonations.length === 0 && donations.length > 0 ? (
+                 <tr><td colSpan="6" style={styles.td}><div style={styles.noData}>No donations match your current filters</div></td></tr>
+              ) : filteredDonations.length === 0 && donations.length === 0 ? (
+                 <tr><td colSpan="6" style={styles.td}><div style={styles.noData}>No donation records found in the database.</div></td></tr>
               ) : (
-                filteredDonations.slice(0, showAll ? filteredDonations.length : 5).map((d) => {
+                filteredDonations.slice(0, showAll ? filteredDonations.length : 10).map((d) => { // Increased visible rows to 10
                   const status = (d.status || 'UNKNOWN').toString().toUpperCase();
                   return (
                     <tr key={d.id || d.order_id || Math.random()}>
                       <td style={styles.td}>{d.order_id || 'N/A'}</td>
                       <td style={styles.td}>{d.name || `${d.first_name || ''} ${d.last_name || ''}`}</td>
                       <td style={styles.td}>{d.email || 'N/A'}</td>
-                      <td style={styles.td}>{d.amount}</td>
+                      <td style={styles.td}>{safeParseFloat(d.amount).toFixed(2)} {d.currency || 'UGX'}</td>
                       <td style={styles.td}><span style={styles.statusBadge(status)}>{status}</span></td>
                       <td style={styles.td}>{formatDate(d.created_at || d.date_booked)}</td>
                     </tr>
@@ -364,7 +424,7 @@ const AdminDashboard = () => {
               )}
             </tbody>
           </table>
-          {filteredDonations.length > 5 && (
+          {filteredDonations.length > 10 && (
             <div style={{ marginTop: 12, textAlign: 'center' }}>
               <button onClick={() => setShowAll((s) => !s)} style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(16,24,40,0.06)', cursor: 'pointer' }}>{showAll ? 'Show Less' : 'Show All'}</button>
             </div>
