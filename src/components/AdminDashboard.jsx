@@ -16,7 +16,7 @@ import {
 // const API_URL = 'http://127.0.0.1:8000/api/donations/admin_dashboard/';
 const API_URL = 'https://api.hifitechsolns.com/api/donations/admin_dashboard/';
 
-// const TOKEN = 'e4cb2d486ca67ffc90e39536f166104bc128bf71';
+const TOKEN = 'e4cb2d486ca67ffc90e39536f166104bc128bf71';
 const TOKEN = localStorage.getItem('adminToken');
 const CHART_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444'];
 
