@@ -1,60 +1,33 @@
-import React, { useState } from "react";
-import axios, { AxiosError } from "axios"; // Import AxiosError for type safety
+import { useState } from "react";
+import axios from "axios";
 import { useNavigate } from "react-router-dom";
 
-// Note: Ensure this URL matches your Django endpoint
-const API_LOGIN_URL = "https://api.hifitechsolns.com/api/donations/admin_login/"; 
-
-const AdminLogin: React.FC = () => {
+const AdminLogin = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false); // Added loading state
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault(); // Prevents default page reload on form submission
-    setError("");
-    setLoading(true);
-
+  const handleLogin = async () => {
+    setError(""); // clear error
     try {
-      const res = await axios.post(API_LOGIN_URL, {
+      const res = await axios.post("https://api.hifitechsolns.com/api/donations/admin_login/", {
         username,
         password,
       });
 
-      // Assuming Django DRF Simple JWT returns 'access' and 'refresh'
-      const accessToken = res.data.access || res.data.token; 
-      const adminUsername = res.data.username || username;
+      // Django returns { token: "abc123..." }
+      localStorage.setItem("adminToken", res.data.token);
 
-      if (accessToken) {
-        // Store access token and username
-        localStorage.setItem("adminToken", accessToken);
-        localStorage.setItem("adminUsername", adminUsername); 
-        navigate("/admin-dashboard");
-      } else {
-        setError("Login successful, but no token was provided by the server.");
-      }
-
-    } catch (err) {
-      // Use AxiosError for safer type checking
-      const axiosError = err as AxiosError<{ detail?: string }>;
-
-      // Extract error message from Django's typical structure
-      const errorMessage = axiosError.response?.data?.detail 
-        ? axiosError.response.data.detail 
-        : "Login failed. Check your credentials.";
-        
-      setError(errorMessage);
-
-    } finally {
-      setLoading(false);
+      navigate("/admin-dashboard");
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Invalid username or password");
     }
   };
 
   return (
     <div style={styles.container}>
-      <form style={styles.card} onSubmit={handleLogin}>
+      <div style={styles.card}>
         <h2 style={styles.title}>Admin Login</h2>
 
         <input
@@ -62,8 +35,6 @@ const AdminLogin: React.FC = () => {
           placeholder="Username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          required
-          disabled={loading}
         />
 
         <input
@@ -72,25 +43,17 @@ const AdminLogin: React.FC = () => {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          required
-          disabled={loading}
         />
 
-        <button 
-          style={styles.button} 
-          type="submit" 
-          disabled={loading}
-        >
-          {loading ? "Logging In..." : "Login"}
+        <button style={styles.button} onClick={handleLogin}>
+          Login
         </button>
 
         {error && <p style={styles.error}>{error}</p>}
-      </form>
+      </div>
     </div>
   );
 };
-
-// --- Styles object (Unchanged but included for completeness) ---
 
 const styles = {
   container: {
