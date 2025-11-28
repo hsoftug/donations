@@ -57,7 +57,7 @@ const AdminDashboard = () => {
         setLoading(true);
         const res = await fetch(API_URL, {
           headers: {
-            Authorization: `Token ${TOKEN}`, // always use the constant
+            Authorization: `Token ${token}`, // always use the constant
             'Content-Type': 'application/json',
           },
         });
