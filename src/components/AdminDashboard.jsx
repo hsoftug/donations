@@ -14,8 +14,7 @@ import {
 } from 'recharts';
 
 const API_URL = 'https://api.hifitechsolns.com/api/donations/admin_dashboard/';
-const TOKEN = '6ce29476cf123ac05e3236953148058c7c945f80';
-const TOKEN = localStorage.getItem('adminToken');
+const token = localStorage.getItem('adminToken');
 const CHART_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444'];
 
 const AdminDashboard = () => {
