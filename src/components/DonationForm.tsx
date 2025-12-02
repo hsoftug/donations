@@ -1,12 +1,15 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState } from "react";
+
+// --- Type Definitions ---
+type Currency = "UGX" | "USD" | "KES" | "TZS";
 
 interface DonationFormData {
   name: string;
   email: string;
   amount: string;
+  phone_prefix: string;
   phone_number: string;
-  currency: string;
+  currency: Currency;
 }
 
 interface DonationResponse {
@@ -23,11 +26,34 @@ interface DonationResponse {
   error?: string;
 }
 
+// --- Constants ---
+const DEFAULT_PROJECT_ID = "general";
+
+const COUNTRY_CODES = [
+  { code: "+256", name: "🇺🇬 Uganda" },
+  { code: "+254", name: "🇰🇪 Kenya" },
+  { code: "+255", name: "🇹🇿 Tanzania" },
+  { code: "+27", name: "🇿🇦 South Africa" },
+  { code: "+1", name: "🇺🇸 USA/Canada" },
+  { code: "+44", name: "🇬🇧 UK" },
+];
+
+const useQuickAmounts = () => ({
+  UGX: [5000, 10000, 25000, 50000, 100000],
+  USD: [5, 10, 25, 50, 100],
+  KES: [100, 500, 1000, 2500, 5000],
+  TZS: [2000, 5000, 10000, 25000, 50000],
+});
+
 const DonationForm = () => {
+  const quickAmountsMap = useQuickAmounts();
+  const PRIMARY_BLUE = "#157EC2";
+
   const [formData, setFormData] = useState<DonationFormData>({
     name: "",
     email: "",
     amount: "",
+    phone_prefix: "+256",
     phone_number: "",
     currency: "UGX",
   });
@@ -35,63 +61,60 @@ const DonationForm = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const navigate = useNavigate();
 
-  // Predefined donation amounts
-  const quickAmounts = [5000, 10000, 25000, 50000, 100000];
+  const currencySymbols: Record<Currency, string> = {
+    UGX: "UGX",
+    USD: "$",
+    KES: "KES",
+    TZS: "TZS",
+  };
+
+  // --- Format with commas ---
+  const formatWithCommas = (value: string) => {
+    const num = value.replace(/,/g, "");
+    if (!num) return "";
+    return Number(num).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  };
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-    // Clear errors when user starts typing
+
+    // Format amount with commas
+    if (name === "amount") {
+      const formatted = value.replace(/[^\d]/g, "");
+      setFormData((prev) => ({ ...prev, amount: formatWithCommas(formatted) }));
+    } else {
+      setFormData((prev) => ({ ...prev, [name]: value }));
+    }
+
     if (error) setError(null);
   };
 
   const handleQuickAmount = (amount: number) => {
     setFormData((prev) => ({
       ...prev,
-      amount: amount.toString(),
+      amount: formatWithCommas(amount.toString()),
     }));
+    if (error) setError(null);
   };
 
   const validateForm = (): boolean => {
+    const amount = Number(formData.amount.replace(/,/g, ""));
     if (!formData.name.trim()) {
       setError("Please enter your name");
       return false;
     }
-
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
       setError("Please enter a valid email address");
       return false;
     }
-
-    const amount = Number(formData.amount);
     if (!amount || amount <= 0) {
       setError("Please enter a valid amount greater than 0");
       return false;
     }
-
-    if (formData.currency === "UGX" && amount < 1000) {
-      setError("Minimum donation amount is UGX 1,000");
-      return false;
-    }
-
-    if (formData.currency === "USD" && amount < 1) {
-      setError("Minimum donation amount is USD 1");
-      return false;
-    }
-
-    if (formData.phone_number && !formData.phone_number.startsWith("+")) {
-      setError("Phone number must start with country code (e.g., +256)");
-      return false;
-    }
-
     return true;
   };
 
@@ -100,58 +123,42 @@ const DonationForm = () => {
     setError(null);
     setSuccess(null);
 
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     setLoading(true);
 
+    const fullPhoneNumber = formData.phone_number.trim()
+      ? `${formData.phone_prefix}${formData.phone_number.trim()}`
+      : "";
+
     try {
-      const response = await fetch("https://api.hifitechsolns.com/api/donations/donate/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...formData,
-          amount: Number(formData.amount),
-        }),
-      });
+      const response = await fetch(
+        "https://api.hifitechsolns.com/api/donations/donate/",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: formData.name,
+            email: formData.email,
+            amount: Number(formData.amount.replace(/,/g, "")),
+            currency: formData.currency,
+            phone_number: fullPhoneNumber,
+            project_id: DEFAULT_PROJECT_ID,
+          }),
+        }
+      );
 
       const data: DonationResponse = await response.json();
 
       if (response.ok && data.success) {
-        setSuccess("Redirecting to payment gateway...");
-
-        // Store donation info in localStorage for tracking
-        localStorage.setItem(
-          "pending_donation",
-          JSON.stringify({
-            donation_id: data.data.donation_id,
-            order_id: data.data.order_id,
-            amount: data.data.amount,
-            currency: data.data.currency,
-            timestamp: new Date().toISOString(),
-          })
-        );
-
-        // Redirect to Pesapal payment page in the same window
-        // This is better than window.open for mobile compatibility
+        setSuccess("Redirecting to secure payment gateway...");
+        localStorage.setItem("pending_donation", JSON.stringify(data.data));
         window.location.href = data.data.redirect_url;
-
-        // Alternative: Open in new tab (uncomment if preferred)
-        // window.open(data.data.redirect_url, "_blank");
-        // setTimeout(() => {
-        //   navigate(`/donation-status/${data.data.order_id}`);
-        // }, 2000);
       } else {
         setError(data.error || data.message || "Something went wrong. Please try again.");
       }
-    } catch (err) {
-      console.error("Donation error:", err);
-      setError(
-        "Network error. Please check your connection and try again."
-      );
+    } catch {
+      setError("Network error. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -160,251 +167,215 @@ const DonationForm = () => {
   const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat("en-UG", {
       style: "currency",
-      currency: currency,
+      currency,
       minimumFractionDigits: 0,
     }).format(amount);
   };
 
+  const quickAmounts = quickAmountsMap[formData.currency] || [];
+  const currentSymbol = currencySymbols[formData.currency];
+
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md mx-auto">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-md w-full mx-auto">
+        {/* Logo & Title */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Make a Donation
+          <div className="mx-auto w-20 h-20 mb-4 flex items-center justify-center border-3 border-gray-100 overflow-hidden rounded-full">
+            <img
+              src="/charity.jpg"
+              alt="Charity Organization Logo"
+              className="w-full h-full object-contain p-2"
+            />
+          </div>
+          <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-2" style={{ color: PRIMARY_BLUE }}>
+            Secure Donation
           </h1>
-          <p className="text-gray-600">
-            Your contribution makes a difference
+          <p className="text-gray-600 text-base">
+            Your contribution goes directly to the LA CHARITY ORG.
           </p>
         </div>
 
-        <div className="bg-white shadow-lg rounded-lg p-6 sm:p-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Name Field */}
-            <div>
-              <label
-                htmlFor="name"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Full Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                placeholder="John Doe"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              />
-            </div>
-
-            {/* Email Field */}
-            <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Email Address <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="email"
-                id="email"
-                name="email"
-                value={formData.email}
-                onChange={handleChange}
-                required
-                placeholder="john@example.com"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              />
-            </div>
-
-            {/* Phone Number Field */}
-            <div>
-              <label
-                htmlFor="phone_number"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Phone Number <span className="text-gray-400">(Optional)</span>
-              </label>
-              <input
-                type="tel"
-                id="phone_number"
-                name="phone_number"
-                value={formData.phone_number}
-                onChange={handleChange}
-                placeholder="+256700000000"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Include country code (e.g., +256 for Uganda)
-              </p>
-            </div>
-
-            {/* Currency Selection */}
-            <div>
-              <label
-                htmlFor="currency"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Currency <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="currency"
-                name="currency"
-                value={formData.currency}
-                onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-              >
-                <option value="UGX">🇺🇬 Ugandan Shilling (UGX)</option>
-                <option value="USD">🇺🇸 US Dollar (USD)</option>
-                <option value="KES">🇰🇪 Kenyan Shilling (KES)</option>
-                <option value="TZS">🇹🇿 Tanzanian Shilling (TZS)</option>
-              </select>
-            </div>
-
-            {/* Quick Amount Buttons */}
-            {formData.currency === "UGX" && (
+        {/* Form Card */}
+        <div className="bg-white shadow-2xl ring-1 ring-gray-100 rounded-xl p-6 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-8">
+            {/* Amount & Currency */}
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-800">Choose Amount</h3>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Quick Select Amount
+                <label htmlFor="currency" className="block text-sm font-medium text-gray-700 mb-2">
+                  Currency <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <select
+                  id="currency"
+                  name="currency"
+                  value={formData.currency}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white appearance-none transition-all duration-200 shadow-sm focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] text-base hover:border-gray-400"
+                >
+                  <option value="UGX">Ugandan Shilling (UGX)</option>
+                  <option value="USD">US Dollar (USD)</option>
+                  <option value="KES">Kenyan Shilling (KES)</option>
+                  <option value="TZS">Tanzanian Shilling (TZS)</option>
+                </select>
+              </div>
+
+              {/* Quick Select */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Quick Select ({currentSymbol})
+                </label>
+                <div className="grid grid-cols-3 gap-3">
                   {quickAmounts.map((amount) => (
                     <button
                       key={amount}
                       type="button"
                       onClick={() => handleQuickAmount(amount)}
-                      className={`px-4 py-2 rounded-lg border-2 transition ${
-                        formData.amount === amount.toString()
-                          ? "border-blue-500 bg-blue-50 text-blue-700 font-semibold"
-                          : "border-gray-300 hover:border-blue-300 text-gray-700"
+                      className={`px-3 py-2 rounded-xl border-2 text-sm font-semibold transition-all duration-200 ${
+                        formData.amount.replace(/,/g, "") === amount.toString()
+                          ? "border-[#157EC2] text-white shadow-md transform scale-[1.02]"
+                          : "border-gray-300 bg-white text-gray-700 hover:bg-blue-50 hover:border-[#4B9CD7] transform hover:scale-[1.01]"
                       }`}
+                      style={{
+                        backgroundColor:
+                          formData.amount.replace(/,/g, "") === amount.toString() ? PRIMARY_BLUE : "white",
+                      }}
                     >
-                      {formatCurrency(amount, "UGX")}
+                      {formatCurrency(amount, formData.currency)}
                     </button>
                   ))}
                 </div>
               </div>
-            )}
 
-            {/* Amount Field */}
-            <div>
-              <label
-                htmlFor="amount"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                Donation Amount <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-2 text-gray-500 font-medium">
-                  {formData.currency}
-                </span>
+              {/* Custom Amount */}
+              <div className="mt-6">
+                <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
+                  Custom Amount <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-extrabold text-gray-400 transition-colors duration-200">
+                    {currentSymbol}
+                  </span>
+                  <input
+                    style={{ color: PRIMARY_BLUE }}
+                    type="text"
+                    id="amount"
+                    name="amount"
+                    value={formData.amount}
+                    onChange={handleChange}
+                    required
+                    placeholder="0.00"
+                    className="w-full pl-20 pr-4 py-3 text-3xl font-semibold border-2 border-gray-300 rounded-lg focus:ring-4 focus:ring-[#157EC2] focus:border-[#157EC2] transition-all duration-300 shadow-inner"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <hr className="border-gray-100" />
+
+            {/* Donor Info */}
+            <div className="space-y-4 pt-1">
+              <h3 className="text-xl font-semibold text-gray-800">Your Contact Details</h3>
+
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
                 <input
-                  type="number"
-                  id="amount"
-                  name="amount"
-                  value={formData.amount}
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={formData.name}
                   onChange={handleChange}
                   required
-                  min="1"
-                  step="any"
-                  placeholder="Enter amount"
-                  className="w-full pl-16 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                  placeholder="Enter your full name"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
                 />
               </div>
-              <p className="mt-1 text-xs text-gray-500">
-                {formData.currency === "UGX"
-                  ? "Minimum: UGX 1,000"
-                  : "Minimum: USD 1"}
-              </p>
+
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  required
+                  placeholder="youremail@example.com"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                />
+              </div>
+
+              {/* Phone Number */}
+              <div>
+                <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone Number <span className="text-gray-400 font-normal">(Optional)</span>
+                </label>
+                <div className="flex space-x-2">
+                  <select
+                    id="phone_prefix"
+                    name="phone_prefix"
+                    value={formData.phone_prefix}
+                    onChange={handleChange}
+                    className="flex-shrink-0 w-1/3 sm:w-1/4 px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                  >
+                    {COUNTRY_CODES.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.code} {country.name.split(" ")[0]}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    type="tel"
+                    id="phone_number"
+                    name="phone_number"
+                    value={formData.phone_number}
+                    onChange={handleChange}
+                    placeholder="e.g., 700123456"
+                    className="w-2/3 sm:w-3/4 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                  />
+                </div>
+              </div>
             </div>
+
+            {/* Feedback */}
+            {success && (
+              <div className="p-3 bg-green-100 border border-green-300 rounded-lg text-green-800 font-medium flex items-center shadow-inner animate-pulse">
+                <p>{success}</p>
+              </div>
+            )}
+            {error && (
+              <div className="p-3 bg-red-100 border border-red-300 rounded-lg text-red-800 font-medium flex items-center shadow-inner">
+                <p>{error}</p>
+              </div>
+            )}
 
             {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className={`w-full py-3 px-4 rounded-lg font-semibold text-white transition-all duration-200 ${
+              style={{ backgroundColor: loading ? "#4B9CD7" : PRIMARY_BLUE }}
+              className={`w-full py-3 px-4 rounded-lg font-bold text-xl text-white transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-[#157EC2] focus:ring-opacity-50 ${
                 loading
-                  ? "bg-gray-400 cursor-not-allowed"
-                  : "bg-blue-600 hover:bg-blue-700 hover:shadow-lg transform hover:-translate-y-0.5"
+                  ? "cursor-not-allowed"
+                  : "shadow-lg hover:shadow-2xl transform hover:-translate-y-1 hover:bg-blue-600"
               }`}
             >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <svg
-                    className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  Processing...
-                </span>
-              ) : (
-                "Proceed to Payment"
-              )}
+              {loading
+                ? "Processing..."
+                : `Proceed to Donate ${
+                    formData.amount ? formatCurrency(Number(formData.amount.replace(/,/g, "")), formData.currency) : ""
+                  }`}
             </button>
           </form>
 
-          {/* Success Message */}
-          {success && (
-            <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <div className="flex items-center">
-                <svg
-                  className="w-5 h-5 text-green-500 mr-2"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <p className="text-green-800 font-medium">{success}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Error Message */}
-          {error && (
-            <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-              <div className="flex items-center">
-                <svg
-                  className="w-5 h-5 text-red-500 mr-2"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <p className="text-red-800 font-medium">{error}</p>
-              </div>
-            </div>
-          )}
-
           {/* Security Notice */}
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-600 text-center">
-              🔒 Secure payment powered by Pesapal. Your payment information is
-              encrypted and secure.
+          <div className="mt-6 pt-4 border-t border-gray-100">
+            <p className="text-xs text-gray-500 text-center flex items-center justify-center">
+              **100% Secure Transaction**. Payment is processed via Pesapal.
             </p>
           </div>
         </div>
