@@ -180,7 +180,7 @@ const DonationForm = () => {
       <div className="max-w-md w-full mx-auto">
         {/* Logo & Title */}
         <div className="text-center mb-8">
-          <div className="mx-auto w-20 h-20 mb-4 flex items-center justify-center border-3 border-gray-100 overflow-hidden rounded-full">
+          <div className="mx-auto w-20 h-20 mb-4 flex items-center justify-center border-3 border-gray-100 overflow-hidden">
             <img
               src="/charity.jpg"
               alt="Charity Organization Logo"
