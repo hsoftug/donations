@@ -1,389 +1,388 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom'; // ✅ import useNavigate
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts';
+import React, { useState } from "react";
 
-const API_URL = 'https://api.hifitechsolns.com/api/donations/admin_dashboard/';
-const token = localStorage.getItem('adminToken');
-const CHART_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444'];
+// --- Type Definitions ---
+type Currency = "UGX" | "USD" | "KES" | "TZS";
 
-const AdminDashboard = () => {
-  const navigate = useNavigate(); // ✅ initialize navigate
-  const [donations, setDonations] = useState([]);
-  const [filteredDonations, setFilteredDonations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [showAll, setShowAll] = useState(false);
+interface DonationFormData {
+  name: string;
+  email: string;
+  amount: string;
+  phone_prefix: string;
+  phone_number: string;
+  currency: Currency;
+}
 
+interface DonationResponse {
+  success: boolean;
+  message: string;
+  data: {
+    donation_id: string;
+    order_id: string;
+    amount: number;
+    currency: string;
+    redirect_url: string;
+    order_tracking_id: string;
+  };
+  error?: string;
+}
 
+// --- Constants ---
+const DEFAULT_PROJECT_ID = "general";
 
-  
+const COUNTRY_CODES = [
+  { code: "+256", name: "🇺🇬 Uganda" },
+  { code: "+254", name: "🇰🇪 Kenya" },
+  { code: "+255", name: "🇹🇿 Tanzania" },
+  { code: "+27", name: "🇿🇦 South Africa" },
+  { code: "+1", name: "🇺🇸 USA/Canada" },
+  { code: "+44", name: "🇬🇧 UK" },
+];
 
-  useEffect(() => {
-    const token = localStorage.getItem('adminToken');
-    if (!token) return navigate('/admin-login'); // ✅ navigate works now
-    fetchDonations(token);
+const useQuickAmounts = () => ({
+  UGX: [5000, 10000, 25000, 50000, 100000],
+  USD: [5, 10, 25, 50, 100],
+  KES: [100, 500, 1000, 2500, 5000],
+  TZS: [2000, 5000, 10000, 25000, 50000],
+});
 
-    const mql = window.matchMedia('(max-width: 900px)');
-    setSidebarOpen(!mql.matches);
-    const handler = (e) => setSidebarOpen(!e.matches);
-    mql.addEventListener ? mql.addEventListener('change', handler) : mql.addListener(handler);
-    return () => {
-      mql.removeEventListener ? mql.removeEventListener('change', handler) : mql.removeListener(handler);
-    };
-  }, [navigate]);
+const DonationForm = () => {
+  const quickAmountsMap = useQuickAmounts();
+  const PRIMARY_BLUE = "#157EC2";
 
-  useEffect(() => {
-    applyFilters();
-  }, [donations, searchTerm, statusFilter]);
+  const [formData, setFormData] = useState<DonationFormData>({
+    name: "",
+    email: "",
+    amount: "",
+    phone_prefix: "+256",
+    phone_number: "",
+    currency: "UGX",
+  });
 
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-    const fetchDonations = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch(API_URL, {
-          headers: {
-            Authorization: `Token ${token}`, // always use the constant
-            'Content-Type': 'application/json',
-          },
-        });
-        if (!res.ok) throw new Error('Failed to fetch donations');
-        const data = await res.json();
-        setDonations(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        setError('Failed to fetch donations');
-      } finally {
-        setLoading(false);
-      }
-    };
+  const currencySymbols: Record<Currency, string> = {
+    UGX: "UGX",
+    USD: "$",
+    KES: "KES",
+    TZS: "TZS",
+  };
 
+  // --- Format with commas ---
+  const formatWithCommas = (value: string) => {
+    const num = value.replace(/,/g, "");
+    if (!num) return "";
+    return Number(num).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  };
 
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
 
-
-
-
-
-  const applyFilters = () => {
-    let filtered = [...donations];
-    if (statusFilter !== 'ALL') {
-      filtered = filtered.filter((d) => (d.status || '').toUpperCase() === statusFilter);
+    // Format amount with commas
+    if (name === "amount") {
+      const formatted = value.replace(/[^\d]/g, "");
+      setFormData((prev) => ({ ...prev, amount: formatWithCommas(formatted) }));
+    } else {
+      setFormData((prev) => ({ ...prev, [name]: value }));
     }
-    if (searchTerm && searchTerm.trim() !== '') {
-      const q = searchTerm.toLowerCase();
-      filtered = filtered.filter((d) => {
-        const name = (d.name || `${d.first_name || ''} ${d.last_name || ''}`).toString().toLowerCase();
-        const email = (d.email || '').toString().toLowerCase();
-        const orderId = (d.order_id || '').toString().toLowerCase();
-        return name.includes(q) || email.includes(q) || orderId.includes(q);
-      });
+
+    if (error) setError(null);
+  };
+
+  const handleQuickAmount = (amount: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      amount: formatWithCommas(amount.toString()),
+    }));
+    if (error) setError(null);
+  };
+
+  const validateForm = (): boolean => {
+    const amount = Number(formData.amount.replace(/,/g, ""));
+    if (!formData.name.trim()) {
+      setError("Please enter your name");
+      return false;
     }
-    setFilteredDonations(filtered);
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email)) {
+      setError("Please enter a valid email address");
+      return false;
+    }
+    if (!amount || amount <= 0) {
+      setError("Please enter a valid amount greater than 0");
+      return false;
+    }
+    return true;
   };
 
-  const calculateStats = () => {
-    const total = donations.length;
-    const completed = donations.filter((d) => (d.status || '').toUpperCase() === 'COMPLETED').length;
-    const pending = donations.filter((d) => (d.status || '').toUpperCase() === 'PENDING').length;
-    const failed = donations.filter((d) => (d.status || '').toUpperCase() === 'FAILED').length;
-    const totalAmount = donations
-      .filter((d) => (d.status || '').toUpperCase() === 'COMPLETED')
-      .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
-    return { total, completed, pending, failed, totalAmount };
-  };
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
 
-  const stats = calculateStats();
+    if (!validateForm()) return;
 
-  const topDonorsData = () => {
-    const map = {};
-    donations.forEach((d) => {
-      const key = d.name || d.email || d.order_id || 'Anonymous';
-      const amt = parseFloat(d.amount || 0);
-      map[key] = (map[key] || 0) + (isFinite(amt) ? amt : 0);
-    });
-    const arr = Object.entries(map).map(([name, amount]) => ({ name, amount }));
-    return arr.sort((a, b) => b.amount - a.amount).slice(0, 7);
-  };
+    setLoading(true);
 
-  const statusPieData = () => {
-    const counts = {};
-    donations.forEach((d) => {
-      const s = (d.status || 'UNKNOWN').toUpperCase();
-      counts[s] = (counts[s] || 0) + 1;
-    });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  };
+    const fullPhoneNumber = formData.phone_number.trim()
+      ? `${formData.phone_prefix}${formData.phone_number.trim()}`
+      : "";
 
-  const formatDate = (d) => {
-    if (!d) return 'N/A';
     try {
-      return new Date(d).toLocaleString();
+      const response = await fetch(
+        "https://api.hifitechsolns.com/api/donations/donate/",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: formData.name,
+            email: formData.email,
+            amount: Number(formData.amount.replace(/,/g, "")),
+            currency: formData.currency,
+            phone_number: fullPhoneNumber,
+            project_id: DEFAULT_PROJECT_ID,
+          }),
+        }
+      );
+
+      const data: DonationResponse = await response.json();
+
+      if (response.ok && data.success) {
+        setSuccess("Redirecting to secure payment gateway...");
+        localStorage.setItem("pending_donation", JSON.stringify(data.data));
+        window.location.href = data.data.redirect_url;
+      } else {
+        setError(data.error || data.message || "Something went wrong. Please try again.");
+      }
     } catch {
-      return d;
+      setError("Network error. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const styles = {
-    root: {
-      display: 'flex',
-      minHeight: '100vh',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial',
-      background: 'linear-gradient(135deg,#f3f4f6 0%, #eef2ff 100%)',
-      color: '#0f172a',
-    },
-    sidebar: {
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      height: '100vh',
-      width: 280,
-      background: 'linear-gradient(180deg,#0f172a 0%, #111827 100%)',
-      color: 'white',
-      padding: 20,
-      boxShadow: '4px 0 30px rgba(2,6,23,0.2)',
-      borderRight: '1px solid rgba(255,255,255,0.03)',
-      transition: 'transform 220ms ease',
-      zIndex: 50,
-    },
-    sidebarHidden: { transform: 'translateX(-110%)', position: 'fixed', zIndex: 50 },
-    logo: { fontSize: 22, fontWeight: 800, marginBottom: 18, display: 'flex', alignItems: 'center', gap: 10 },
-    navItem: {
-      padding: '12px 14px',
-      borderRadius: 10,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      color: 'rgba(255,255,255,0.9)',
-      marginBottom: 8,
-      fontWeight: 600,
-    },
-    main: { flex: 1, padding: 28, marginLeft: 280, minWidth: 0 },
-    topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 },
-    pageTitle: { fontSize: 28, fontWeight: 800, color: '#111827' },
-    controls: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-    input: { padding: '10px 14px', borderRadius: 10, border: '1px solid #e6e9ef', minWidth: 240, outline: 'none' },
-    filterBtn: (active) => ({
-      padding: '9px 14px',
-      borderRadius: 10,
-      border: '1px solid transparent',
-      cursor: 'pointer',
-      background: active ? '#667eea' : 'white',
-      color: active ? 'white' : '#111827',
-      fontWeight: 700,
-    }),
-    statsRow: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 16, marginBottom: 20 },
-    statCard: { background: 'white', padding: 16, borderRadius: 12, boxShadow: '0 8px 24px rgba(16,24,40,0.06)' },
-    chartsRow: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, marginBottom: 20 },
-    tableWrap: { background: 'white', borderRadius: 12, padding: 12, boxShadow: '0 12px 30px rgba(2,6,23,0.06)' },
-    table: { width: '100%', borderCollapse: 'collapse', fontSize: 14 },
-    th: { textAlign: 'left', padding: '12px 10px', borderBottom: '1px solid #eef2f6', color: '#374151', fontWeight: 800, fontSize: 12, textTransform: 'uppercase' },
-    td: { padding: '12px 10px', borderBottom: '1px solid #f3f4f6', color: '#111827' },
-    statusBadge: (status) => {
-      const map = {
-        COMPLETED: { background: '#d1fae5', color: '#065f46' },
-        PENDING: { background: '#fff7ed', color: '#92400e' },
-        FAILED: { background: '#fee2e2', color: '#991b1b' },
-      };
-      return { display: 'inline-block', padding: '6px 12px', borderRadius: 999, fontWeight: 800, fontSize: 12, ...(map[status] || { background: '#eef2ff', color: '#1e293b' }) };
-    },
-    mobileToggle: { display: 'none', borderRadius: 10, padding: '8px 12px', cursor: 'pointer', border: '1px solid rgba(16,24,40,0.06)', background: 'white' },
-    noData: { padding: 28, textAlign: 'center', color: '#64748b' },
+  const formatCurrency = (amount: number, currency: string) => {
+    return new Intl.NumberFormat("en-UG", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 0,
+    }).format(amount);
   };
 
-  const topDonors = topDonorsData();
-  const pieData = statusPieData();
-
-  if (loading) {
-    return (
-      <div style={{ ...styles.root, alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Loading dashboard…</div>
-          <div style={{ color: '#64748b' }}>Fetching donations from the server</div>
-        </div>
-      </div>
-    );
-  }
+  const quickAmounts = quickAmountsMap[formData.currency] || [];
+  const currentSymbol = currencySymbols[formData.currency];
 
   return (
-    <div style={styles.root}>
-      {/* small-screen toggle */}
-      <style>
-        {`
-          @media (max-width: 900px) { .mobileToggle { display: inline-flex !important; } .sidebarHidden { transform: translateX(0) !important; } }
-          @media (max-width: 760px) { .statsGrid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .chartsGrid { grid-template-columns: 1fr !important; } .chartsRow { grid-template-columns: 1fr !important; } .sidebar { position: fixed; z-index: 60; top: 0; left: 0; height: 100vh; } }
-        `}
-      </style>
-
-      <aside style={{ ...styles.sidebar, display: 'flex', flexDirection: 'column', ...(sidebarOpen ? {} : styles.sidebarHidden) }} className="sidebar">
-        <div style={styles.logo}>
-          <img src="/charity.jpg" alt="LA Charity Logo" style={{ width: 60, height: 60, borderRadius: '50%' }} />
-          <span>LA CHARITY Donations.</span>
-        </div>
-        <nav style={{ flex: 1 }}>
-          {['Dashboard', 'Donations', 'Donors', 'Reports', 'Settings'].map((item) => (
-            <div key={item} style={styles.navItem} title={item}>
-              <span>{item === 'Dashboard' ? '📊' : item === 'Donations' ? '💳' : item === 'Donors' ? '👥' : item === 'Reports' ? '📈' : '⚙️'}</span>
-              <span>{item}</span>
-            </div>
-          ))}
-        </nav>
-        <div style={{ fontSize: 13, opacity: 0.85 }}>
-          <div style={{ marginBottom: 8 }}>Signed in as</div>
-          <div style={{ fontWeight: 800 }}>admin@lacharityorganisation.com</div>
-        </div>
-      </aside>
-
-      <main style={styles.main}>
-        <div style={styles.topBar}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <button onClick={() => setSidebarOpen((s) => !s)} className="mobileToggle" style={styles.mobileToggle}>☰</button>
-            <div>
-              <div style={styles.pageTitle}>Admin Dashboard</div>
-              <div style={{ color: '#64748b', fontSize: 13 }}>Overview of donations and donors</div>
-            </div>
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-md w-full mx-auto">
+        {/* Logo & Title */}
+        <div className="text-center mb-8">
+          <div className="mx-auto w-20 h-20 mb-4 flex items-center justify-center border-3 border-gray-100 overflow-hidden">
+            <img
+              src="/charity.jpg"
+              alt="Charity Organization Logo"
+              className="w-full h-full object-contain p-2"
+            />
           </div>
-          <div style={styles.controls}>
-            <input placeholder="Search by name, email or order ID" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={styles.input} />
-            {['ALL', 'COMPLETED', 'PENDING', 'FAILED'].map((s) => (
-              <button key={s} onClick={() => setStatusFilter(s)} style={styles.filterBtn(statusFilter === s)}>{s}</button>
+          <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-2" style={{ color: PRIMARY_BLUE }}>
+            Secure Donation
+          </h1>
+          <p className="text-gray-600 text-base">
+            Your contribution goes directly to the LA CHARITY ORG.
+          </p>
+        </div>
+
+        {/* Form Card */}
+        <div className="bg-white shadow-2xl ring-1 ring-gray-100 rounded-xl p-6 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-8">
+            {/* Amount & Currency */}
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-800">Choose Amount</h3>
+              <div>
+                <label htmlFor="currency" className="block text-sm font-medium text-gray-700 mb-2">
+                  Currency <span className="text-red-500">*</span>
+                </label>
+                <select
+                  id="currency"
+                  name="currency"
+                  value={formData.currency}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white appearance-none transition-all duration-200 shadow-sm focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] text-base hover:border-gray-400"
+                >
+                  <option value="UGX">Ugandan Shilling (UGX)</option>
+                  <option value="USD">US Dollar (USD)</option>
+                  <option value="KES">Kenyan Shilling (KES)</option>
+                  <option value="TZS">Tanzanian Shilling (TZS)</option>
+                </select>
+              </div>
+
+              {/* Quick Select */}
+                        <div className="grid grid-cols-3 gap-3">
+            {quickAmounts.map((amount) => (
+              <button
+                key={amount}
+                type="button"
+                onClick={() => handleQuickAmount(amount)}
+                className={`
+                  px-3 py-2 rounded-xl border-2 font-semibold transition-all duration-200 text-sm
+                  whitespace-nowrap overflow-hidden text-ellipsis text-center
+                  ${
+                    formData.amount.replace(/,/g, "") === amount.toString()
+                      ? "border-[#157EC2] text-white shadow-md transform scale-[1.02]"
+                      : "border-gray-300 bg-white text-gray-700 hover:bg-blue-50 hover:border-[#4B9CD7] transform hover:scale-[1.01]"
+                  }
+                `}
+                style={{
+                  backgroundColor:
+                    formData.amount.replace(/,/g, "") === amount.toString() ? PRIMARY_BLUE : "white",
+                  minWidth: "0", // allows button to shrink if needed
+                  flex: "1 1 auto", // lets button expand evenly across row
+                }}
+              >
+                {formatCurrency(amount, formData.currency)}
+              </button>
             ))}
-            <button onClick={() => fetchDonations(localStorage.getItem('adminToken'))} style={{ padding: '9px 14px', borderRadius: 10, border: '1px solid rgba(16,24,40,0.06)', background: 'white', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
-           <div
-  style={{
-    position: 'fixed',    // stay fixed on screen
-    top: 10,              // distance from top
-    right: 10,            // distance from right
-    zIndex: 500,          // above other elements
-  }}
->
-  <button
-    onClick={() => {
-      localStorage.removeItem('adminToken');
-      navigate('/admin-login');
-    }}
-    style={{
-      padding: '4px 7px',
-      borderRadius: 10,
-      border: '1px solid #e65c5c',
-      background: '#e65c5c',
-      color: 'white',
-      cursor: 'pointer',
-      fontWeight: 500,
-    }}
-  >
-    Logout
-  </button>
-</div>
-
           </div>
-        </div>
 
-        {/* statistics */}
-        <div className="statsGrid" style={styles.statsRow}>
-          {['Total donations', 'Completed', 'Pending', 'Failed'].map((label, idx) => {
-            const value = label === 'Total donations' ? stats.totalAmount.toFixed(2) : label === 'Completed' ? stats.completed : label === 'Pending' ? stats.pending : stats.failed;
-            const subtitle = label === 'Total donations' ? `${stats.total} donations` : `${((value / (stats.total || 1)) * 100).toFixed(0)}% of total`;
-            return (
-              <div key={idx} style={styles.statCard}>
-                <div style={{ color: '#64748b', fontWeight: 700, marginBottom: 6 }}>{label}</div>
-                <div style={{ fontSize: 20, fontWeight: 800 }}>{label === 'Total donations' ? `Shs.${value}` : value}</div>
-                <div style={{ marginTop: 8, color: '#94a3b8' }}>{subtitle}</div>
+              {/* Custom Amount */}
+              <div className="mt-6">
+                <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
+                  Custom Amount <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-extrabold text-gray-400 transition-colors duration-200">
+                    {currentSymbol}
+                  </span>
+                  <input
+                    style={{ color: PRIMARY_BLUE }}
+                    type="text"
+                    id="amount"
+                    name="amount"
+                    value={formData.amount}
+                    onChange={handleChange}
+                    required
+                    placeholder="0.00"
+                    className="w-full pl-20 pr-4 py-3 text-3xl font-semibold border-2 border-gray-300 rounded-lg focus:ring-4 focus:ring-[#157EC2] focus:border-[#157EC2] transition-all duration-300 shadow-inner"
+                  />
+                </div>
               </div>
-            );
-          })}
-        </div>
-
-        {/* charts */}
-        <div className="chartsGrid" style={styles.chartsRow}>
-          <div style={{ ...styles.statCard, padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Top donors (by amount)</div>
-            {topDonors.length === 0 ? <div style={styles.noData}>No donation data for chart</div> : (
-              <div style={{ width: '100%', height: 260 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topDonors}>
-                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="amount" fill={CHART_COLORS[0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-          <div style={{ ...styles.statCard, padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Status breakdown</div>
-            {pieData.length === 0 ? <div style={styles.noData}>No donations</div> : (
-              <div style={{ width: '100%', height: 260 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" outerRadius={80} innerRadius={34} label>
-                      {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* table */}
-        <div style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Order ID</th>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Amount</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredDonations.length === 0 ? (
-                <tr><td colSpan="6" style={styles.td}><div style={styles.noData}>No donations match your filters</div></td></tr>
-              ) : (
-                filteredDonations.slice(0, showAll ? filteredDonations.length : 5).map((d) => {
-                  const status = (d.status || 'UNKNOWN').toUpperCase();
-                  return (
-                    <tr key={d.id || d.order_id || Math.random()}>
-                      <td style={styles.td}>{d.order_id || 'N/A'}</td>
-                      <td style={styles.td}>{d.name || `${d.first_name || ''} ${d.last_name || ''}`}</td>
-                      <td style={styles.td}>{d.email || 'N/A'}</td>
-                      <td style={styles.td}>{d.amount}</td>
-                      <td style={styles.td}><span style={styles.statusBadge(status)}>{status}</span></td>
-                      <td style={styles.td}>{formatDate(d.created_at || d.date_booked)}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-          {filteredDonations.length > 5 && (
-            <div style={{ marginTop: 12, textAlign: 'center' }}>
-              <button onClick={() => setShowAll((s) => !s)} style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(16,24,40,0.06)', cursor: 'pointer' }}>{showAll ? 'Show Less' : 'Show All'}</button>
             </div>
-          )}
+
+            <hr className="border-gray-100" />
+
+            {/* Donor Info */}
+            <div className="space-y-4 pt-1">
+              <h3 className="text-xl font-semibold text-gray-800">Your Contact Details</h3>
+
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  required
+                  placeholder="Enter your full name"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  required
+                  placeholder="youremail@example.com"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                />
+              </div>
+
+              {/* Phone Number */}
+              <div>
+                <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone Number <span className="text-gray-400 font-normal">(Optional)</span>
+                </label>
+                <div className="flex space-x-2">
+                  <select
+                    id="phone_prefix"
+                    name="phone_prefix"
+                    value={formData.phone_prefix}
+                    onChange={handleChange}
+                    className="flex-shrink-0 w-1/3 sm:w-1/4 px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                  >
+                    {COUNTRY_CODES.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.code} {country.name.split(" ")[0]}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    type="tel"
+                    id="phone_number"
+                    name="phone_number"
+                    value={formData.phone_number}
+                    onChange={handleChange}
+                    placeholder="e.g., 700123456"
+                    className="w-2/3 sm:w-3/4 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#157EC2] focus:border-[#157EC2] transition duration-200 shadow-sm text-base"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Feedback */}
+            {success && (
+              <div className="p-3 bg-green-100 border border-green-300 rounded-lg text-green-800 font-medium flex items-center shadow-inner animate-pulse">
+                <p>{success}</p>
+              </div>
+            )}
+            {error && (
+              <div className="p-3 bg-red-100 border border-red-300 rounded-lg text-red-800 font-medium flex items-center shadow-inner">
+                <p>{error}</p>
+              </div>
+            )}
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              style={{ backgroundColor: loading ? "#4B9CD7" : PRIMARY_BLUE }}
+              className={`w-full py-3 px-4 rounded-lg font-bold text-xl text-white transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-[#157EC2] focus:ring-opacity-50 ${
+                loading
+                  ? "cursor-not-allowed"
+                  : "shadow-lg hover:shadow-2xl transform hover:-translate-y-1 hover:bg-blue-600"
+              }`}
+            >
+              {loading
+                ? "Processing..."
+                : `Proceed to Donate ${
+                    formData.amount ? formatCurrency(Number(formData.amount.replace(/,/g, "")), formData.currency) : ""
+                  }`}
+            </button>
+          </form>
+
+          {/* Security Notice */}
+          <div className="mt-6 pt-4 border-t border-gray-100">
+            <p className="text-xs text-gray-500 text-center flex items-center justify-center">
+              **100% Secure Transaction**. Payment is processed via Pesapal.
+            </p>
+          </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 };
 
-export default AdminDashboard;
+export default DonationForm;
