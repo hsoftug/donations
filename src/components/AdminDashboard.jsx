@@ -133,7 +133,7 @@ const DonationForm = () => {
 
     try {
       const response = await fetch(
-        "https://api.hifitechsolns.com/api/donations/donate/",
+        "https://api.hifitechsolns.com/api/donations/admin_dashboard/",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
