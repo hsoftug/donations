@@ -1,246 +1,175 @@
-interface WorkerSession {
-  token: string | null;
-  expiresAt: number;
-  blockedUntil: number;
+import crypto from 'crypto';
+import { UserProfile, SubscriptionTier, WatchHistoryItem, FavouriteItem } from '../../src/types/index.js';
+
+interface StoredUser {
+  id: string;
+  email: string;
+  name: string;
+  passwordHash: string;
+  tier: SubscriptionTier;
+  createdAt: string;
+  isEmailVerified: boolean;
+  avatarUrl?: string;
 }
 
-const session: WorkerSession = {
-  token: null,
-  expiresAt: 0,
-  blockedUntil: 0
-};
+const JWT_SECRET = process.env.AUTH_SECRET || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IkFuZHJvaWQgVFYiLCJhcHBuYW1lIjoiTXVub3dhdGNoIFRWIiwiaG9zdCI6Im11bm93eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6Ik11bm9XYXRjaCIsImFwcG5hbWUiOiJNdW5vV2F0Y2giLCJob3N0IjoibXVub3dhdGNoLm9yZyIsImFwcHNlY3JldCI6IjE2NTU5NDUzZGYzOTcyZWM4NjA4MmViNDdmMWY2ZTFiIiwiYWN0aXZhdGVkIjoiMSIsImV4cCI6MTcxNTgzMjAwMH0.fY0_HiHkWXJE1ENUakr9MIzYCHf0Xi9kZCBPTpbLrEY';
 
-const USER_AGENT = 'Android IOS v3.0';
+// In-memory data store for the application instance
+class AuthStore {
+  private users = new Map<string, StoredUser>();
+  private watchHistory = new Map<string, WatchHistoryItem[]>(); // userId -> items
+  private favourites = new Map<string, FavouriteItem[]>(); // userId -> items
 
-export class UpstreamWorkerService {
-  private get baseUrl(): string {
-    return (process.env.UPSTREAM_API_BASE_URL || '').replace(/\/+$/, '');
+  constructor() {
+    // Seed standard demo user
+    this.createUser('demo@munowatch.com', 'Demo User', 'password123', 'vip');
+    this.createUser('free@munowatch.com', 'Guest Member', 'password123', 'free');
   }
 
-  private get apiKey(): string {
-    return (process.env.UPSTREAM_API_KEY || '').trim();
+  hashPassword(password: string): string {
+    const salt = 'munowatch_salt_seed';
+    return crypto.scryptSync(password, salt, 32).toString('hex');
   }
 
-  private get userId(): string {
-    return (process.env.UPSTREAM_USER_ID || '1361323').trim();
+  createUser(email: string, name: string, passwordPlain: string, tier: SubscriptionTier = 'free'): StoredUser {
+    const id = 'usr_' + crypto.randomUUID().slice(0, 8);
+    const storedUser: StoredUser = {
+      id,
+      email: email.toLowerCase().trim(),
+      name: name.trim(),
+      passwordHash: this.hashPassword(passwordPlain),
+      tier,
+      createdAt: new Date().toISOString(),
+      isEmailVerified: true,
+      avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name)}`
+    };
+
+    this.users.set(storedUser.id, storedUser);
+    return storedUser;
   }
 
-  private get downloadUrl(): string {
-    return (process.env.UPSTREAM_DOWNLOAD_URL || 'https://munowatch.org/api/download').trim();
-  }
-
-  public isConfigured(): boolean {
-    return Boolean(this.apiKey && this.baseUrl && Date.now() > session.blockedUntil);
-  }
-
-  /**
-   * Acquire or refresh active session token
-   */
-  async getToken(): Promise<string | null> {
-    const now = Date.now();
-    if (now < session.blockedUntil) {
-      return null;
+  findByEmail(email: string): StoredUser | null {
+    const target = email.toLowerCase().trim();
+    for (const user of this.users.values()) {
+      if (user.email === target) return user;
     }
-
-    if (session.token && now < session.expiresAt - 30_000) {
-      return session.token;
-    }
-
-    if (!this.apiKey || !this.baseUrl) {
-      return null;
-    }
-
-    const rand = Math.floor(Math.random() * 900000) + 100000;
-    const body = new URLSearchParams({
-      oauth_uid: `u_auto_${rand}`,
-      oauth_provider: 'google',
-      first_name: 'Auto',
-      last_name: 'User',
-      email: `auto${rand}@mailinator.com`,
-      version: '4.6',
-      device_info: 'Android'
-    });
-
-    try {
-      const resp = await fetch(`${this.baseUrl}/v2/auth/firebase`, {
-        method: 'POST',
-        headers: {
-          'X-Api-Key': this.apiKey,
-          'User-Agent': USER_AGENT,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: body.toString()
-      });
-
-      if (!resp.ok) {
-        if (resp.status === 403 || resp.status === 429) {
-          // Upstream rate limit or suspicious activity flag: cooldown for 5 minutes
-          session.blockedUntil = now + 5 * 60 * 1000;
-          console.warn(`[UpstreamWorker] Upstream server responded with status ${resp.status}. Entering cooldown; using safe local catalogue.`);
-          return null;
-        }
-        return null;
-      }
-
-      const data = await resp.json() as any;
-      if (!data.access_token) {
-        return null;
-      }
-
-      session.token = data.access_token;
-      session.expiresAt = now + 4 * 60 * 1000; // 4 minutes
-      return session.token;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
-  /**
-   * Fetch Dashboard categories and movies
-   */
-  async fetchDashboard(): Promise<any | null> {
-    const token = await this.getToken();
+  findById(id: string): StoredUser | null {
+    return this.users.get(id) || null;
+  }
+
+  verifyPassword(user: StoredUser, passwordPlain: string): boolean {
+    return user.passwordHash === this.hashPassword(passwordPlain);
+  }
+
+  generateToken(user: StoredUser): string {
+    const payload = {
+      uid: user.id,
+      email: user.email,
+      tier: user.tier,
+      exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+    };
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+    return `${encodedPayload}.${signature}`;
+  }
+
+  verifyToken(token: string): StoredUser | null {
     if (!token) return null;
-
     try {
-      const resp = await fetch(`${this.baseUrl}/protected/dashboard/${this.userId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'X-Api-Key': this.apiKey,
-          'User-Agent': USER_AGENT
-        }
-      });
+      const [encodedPayload, signature] = token.split('.');
+      if (!encodedPayload || !signature) return null;
 
-      if (!resp.ok) {
-        return null;
-      }
-      return await resp.json();
+      const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+      if (expectedSig !== signature) return null;
+
+      const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+      if (Date.now() > payload.exp) return null;
+
+      return this.findById(payload.uid);
     } catch {
       return null;
     }
   }
 
-  /**
-   * Search titles
-   */
-  async fetchSearch(query: string): Promise<any | null> {
-    const token = await this.getToken();
-    if (!token) return null;
-
-    try {
-      const enc = encodeURIComponent(query);
-      const resp = await fetch(`${this.baseUrl}/protected/search/${enc}/${this.userId}/0`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'X-Api-Key': this.apiKey,
-          'User-Agent': USER_AGENT
-        }
-      });
-
-      if (!resp.ok) {
-        return null;
-      }
-      return await resp.json();
-    } catch {
-      return null;
-    }
+  updateSubscription(userId: string, tier: SubscriptionTier): StoredUser | null {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.tier = tier;
+    this.users.set(userId, user);
+    return user;
   }
 
-  /**
-   * Fetch download/stream record
-   */
-  async fetchDownloadRecord(vid: string): Promise<any | null> {
-    const token = await this.getToken();
-    if (!token) return null;
-
-    try {
-      const body = `uid=3&vid=${encodeURIComponent(vid)}&state=on`;
-      const resp = await fetch(this.downloadUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'X-Api-Key': this.apiKey,
-          'User-Agent': USER_AGENT,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body
-      });
-
-      if (!resp.ok) {
-        return null;
-      }
-
-      const text = await resp.text();
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Fetch full series episodes by code
-   */
-  async fetchSeriesEpisodes(code: string): Promise<any | null> {
-    const seed = await this.fetchDownloadRecord(code);
-    let seriesCode = code;
-    let baseName = '';
-
-    if (seed && seed.series_code) {
-      seriesCode = seed.series_code;
-      baseName = (seed.title || '')
-        .replace(/\s+Season\s+\d+.*$/i, '')
-        .replace(/\s+S\d+E\d+.*$/i, '')
-        .replace(/\s+Episode\s+\d+.*$/i, '')
-        .replace(/\s+\d+$/, '')
-        .trim();
-    }
-
-    const verified: any[] = [];
-    const seen: Record<string, boolean> = {};
-
-    if (baseName) {
-      const token = await this.getToken();
-      if (token) {
-        for (let ep = 1; ep <= 10; ep++) {
-          const q = `${baseName} ${ep}`;
-          try {
-            const resp = await fetch(`${this.baseUrl}/protected/search/${encodeURIComponent(q)}/${this.userId}/0`, {
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'X-Api-Key': this.apiKey,
-                'User-Agent': USER_AGENT
-              }
-            });
-            if (!resp.ok) continue;
-            const items = await resp.json() as any[];
-            if (!Array.isArray(items)) continue;
-
-            for (const item of items) {
-              if (seen[item.id]) continue;
-              seen[item.id] = true;
-              const dl = await this.fetchDownloadRecord(item.id);
-              if (dl && String(dl.series_code) === String(seriesCode)) {
-                verified.push(dl);
-              }
-            }
-          } catch {}
-        }
-      }
-    }
-
-    if (verified.length === 0) {
-      return null;
-    }
-
-    verified.sort((a, b) => Number(a.id) - Number(b.id));
-
+  toPublicProfile(user: StoredUser): UserProfile {
     return {
-      series_code: seriesCode,
-      base_name: baseName || `Series ${seriesCode}`,
-      count: verified.length,
-      episodes: verified
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      tier: user.tier,
+      createdAt: user.createdAt,
+      isEmailVerified: user.isEmailVerified,
+      avatarUrl: user.avatarUrl
     };
   }
+
+  // Watch History
+  getWatchHistory(userId: string): WatchHistoryItem[] {
+    return this.watchHistory.get(userId) || [];
+  }
+
+  saveWatchHistory(userId: string, item: Omit<WatchHistoryItem, 'id' | 'userId' | 'updatedAt'>): WatchHistoryItem {
+    const list = this.watchHistory.get(userId) || [];
+    const existingIndex = list.findIndex(h => h.itemId === item.itemId && h.episodeNumber === item.episodeNumber);
+
+    const updatedItem: WatchHistoryItem = {
+      ...item,
+      id: 'wh_' + crypto.randomUUID().slice(0, 8),
+      userId,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (existingIndex >= 0) {
+      list[existingIndex] = updatedItem;
+    } else {
+      list.unshift(updatedItem);
+    }
+
+    // Keep up to 20 recent items
+    const trimmed = list.slice(0, 20);
+    this.watchHistory.set(userId, trimmed);
+    return updatedItem;
+  }
+
+  // Favourites
+  getFavourites(userId: string): FavouriteItem[] {
+    return this.favourites.get(userId) || [];
+  }
+
+  addFavourite(userId: string, item: Omit<FavouriteItem, 'id' | 'userId' | 'addedAt'>): FavouriteItem {
+    const list = this.favourites.get(userId) || [];
+    const exists = list.find(f => f.itemId === item.itemId);
+    if (exists) return exists;
+
+    const newFav: FavouriteItem = {
+      ...item,
+      id: 'fav_' + crypto.randomUUID().slice(0, 8),
+      userId,
+      addedAt: new Date().toISOString()
+    };
+
+    list.unshift(newFav);
+    this.favourites.set(userId, list);
+    return newFav;
+  }
+
+  removeFavourite(userId: string, itemId: string): boolean {
+    const list = this.favourites.get(userId) || [];
+    const filtered = list.filter(f => f.itemId !== itemId);
+    this.favourites.set(userId, filtered);
+    return filtered.length < list.length;
+  }
 }
 
-export const upstreamWorker = new UpstreamWorkerService();
+export const authStore = new AuthStore();
