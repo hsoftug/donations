@@ -1,0 +1,246 @@
+interface WorkerSession {
+  token: string | null;
+  expiresAt: number;
+  blockedUntil: number;
+}
+
+const session: WorkerSession = {
+  token: null,
+  expiresAt: 0,
+  blockedUntil: 0
+};
+
+const USER_AGENT = 'Android IOS v3.0';
+
+export class UpstreamWorkerService {
+  private get baseUrl(): string {
+    return (process.env.UPSTREAM_API_BASE_URL || '').replace(/\/+$/, '');
+  }
+
+  private get apiKey(): string {
+    return (process.env.UPSTREAM_API_KEY || '').trim();
+  }
+
+  private get userId(): string {
+    return (process.env.UPSTREAM_USER_ID || '1361323').trim();
+  }
+
+  private get downloadUrl(): string {
+    return (process.env.UPSTREAM_DOWNLOAD_URL || 'https://munowatch.org/api/download').trim();
+  }
+
+  public isConfigured(): boolean {
+    return Boolean(this.apiKey && this.baseUrl && Date.now() > session.blockedUntil);
+  }
+
+  /**
+   * Acquire or refresh active session token
+   */
+  async getToken(): Promise<string | null> {
+    const now = Date.now();
+    if (now < session.blockedUntil) {
+      return null;
+    }
+
+    if (session.token && now < session.expiresAt - 30_000) {
+      return session.token;
+    }
+
+    if (!this.apiKey || !this.baseUrl) {
+      return null;
+    }
+
+    const rand = Math.floor(Math.random() * 900000) + 100000;
+    const body = new URLSearchParams({
+      oauth_uid: `u_auto_${rand}`,
+      oauth_provider: 'google',
+      first_name: 'Auto',
+      last_name: 'User',
+      email: `auto${rand}@mailinator.com`,
+      version: '4.6',
+      device_info: 'Android'
+    });
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/v2/auth/firebase`, {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'User-Agent': USER_AGENT,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: body.toString()
+      });
+
+      if (!resp.ok) {
+        if (resp.status === 403 || resp.status === 429) {
+          // Upstream rate limit or suspicious activity flag: cooldown for 5 minutes
+          session.blockedUntil = now + 5 * 60 * 1000;
+          console.warn(`[UpstreamWorker] Upstream server responded with status ${resp.status}. Entering cooldown; using safe local catalogue.`);
+          return null;
+        }
+        return null;
+      }
+
+      const data = await resp.json() as any;
+      if (!data.access_token) {
+        return null;
+      }
+
+      session.token = data.access_token;
+      session.expiresAt = now + 4 * 60 * 1000; // 4 minutes
+      return session.token;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch Dashboard categories and movies
+   */
+  async fetchDashboard(): Promise<any | null> {
+    const token = await this.getToken();
+    if (!token) return null;
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/protected/dashboard/${this.userId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-Api-Key': this.apiKey,
+          'User-Agent': USER_AGENT
+        }
+      });
+
+      if (!resp.ok) {
+        return null;
+      }
+      return await resp.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Search titles
+   */
+  async fetchSearch(query: string): Promise<any | null> {
+    const token = await this.getToken();
+    if (!token) return null;
+
+    try {
+      const enc = encodeURIComponent(query);
+      const resp = await fetch(`${this.baseUrl}/protected/search/${enc}/${this.userId}/0`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-Api-Key': this.apiKey,
+          'User-Agent': USER_AGENT
+        }
+      });
+
+      if (!resp.ok) {
+        return null;
+      }
+      return await resp.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch download/stream record
+   */
+  async fetchDownloadRecord(vid: string): Promise<any | null> {
+    const token = await this.getToken();
+    if (!token) return null;
+
+    try {
+      const body = `uid=3&vid=${encodeURIComponent(vid)}&state=on`;
+      const resp = await fetch(this.downloadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-Api-Key': this.apiKey,
+          'User-Agent': USER_AGENT,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body
+      });
+
+      if (!resp.ok) {
+        return null;
+      }
+
+      const text = await resp.text();
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch full series episodes by code
+   */
+  async fetchSeriesEpisodes(code: string): Promise<any | null> {
+    const seed = await this.fetchDownloadRecord(code);
+    let seriesCode = code;
+    let baseName = '';
+
+    if (seed && seed.series_code) {
+      seriesCode = seed.series_code;
+      baseName = (seed.title || '')
+        .replace(/\s+Season\s+\d+.*$/i, '')
+        .replace(/\s+S\d+E\d+.*$/i, '')
+        .replace(/\s+Episode\s+\d+.*$/i, '')
+        .replace(/\s+\d+$/, '')
+        .trim();
+    }
+
+    const verified: any[] = [];
+    const seen: Record<string, boolean> = {};
+
+    if (baseName) {
+      const token = await this.getToken();
+      if (token) {
+        for (let ep = 1; ep <= 10; ep++) {
+          const q = `${baseName} ${ep}`;
+          try {
+            const resp = await fetch(`${this.baseUrl}/protected/search/${encodeURIComponent(q)}/${this.userId}/0`, {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'X-Api-Key': this.apiKey,
+                'User-Agent': USER_AGENT
+              }
+            });
+            if (!resp.ok) continue;
+            const items = await resp.json() as any[];
+            if (!Array.isArray(items)) continue;
+
+            for (const item of items) {
+              if (seen[item.id]) continue;
+              seen[item.id] = true;
+              const dl = await this.fetchDownloadRecord(item.id);
+              if (dl && String(dl.series_code) === String(seriesCode)) {
+                verified.push(dl);
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    if (verified.length === 0) {
+      return null;
+    }
+
+    verified.sort((a, b) => Number(a.id) - Number(b.id));
+
+    return {
+      series_code: seriesCode,
+      base_name: baseName || `Series ${seriesCode}`,
+      count: verified.length,
+      episodes: verified
+    };
+  }
+}
+
+export const upstreamWorker = new UpstreamWorkerService();
