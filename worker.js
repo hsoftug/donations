@@ -20,7 +20,7 @@ const FORCED_UID = "3";
 const USER_AGENT = "Android IOS v3.0";
 
 // Hardcoded API key (leaked token from Cloudflare Worker source)
-let API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IkFuZHJvaWQgVFYiLCJhcHBuYW1lIjoiTXVub3dhdGNoIFRWIiwiaG9zdCI6Im11bm93YXRjaC5jbyIsImFwcHNlY3JldCI6IjAyMjc3OGU0MThhZDY4ZmZkYTlhYTRmYWIxODkyZmZmIiwiYWN0aXZhdGVkIjoiMSIsImV4cCI6MTcwNzM2ODQwMH0.unlPnEzptg6VFHs7WWm213bRHHNxYuAN2eZQvjtPKL0";
+let API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IkFuZHJvaWQgVFYiLCJhcHBuYW1lIjoiTXVub3dhdGNoIFRWIiwiaG9zdCI6Im11bm93eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6Ik11bm9XYXRjaCIsImFwcG5hbWUiOiJNdW5vV2F0Y2giLCJob3N0IjoibXVub3dhdGNoLm9yZyIsImFwcHNlY3JldCI6IjE2NTU5NDUzZGYzOTcyZWM4NjA4MmViNDdmMWY2ZTFiIiwiYWN0aXZhdGVkIjoiMSIsImV4cCI6MTcxNTgzMjAwMH0.fY0_HiHkWXJE1ENUakr9MIzYCHf0Xi9kZCBPTpbLrEY";
 
 // Cache the session token (5 min lifetime)
 let SESSION = { token: null, expiresAt: 0 };
